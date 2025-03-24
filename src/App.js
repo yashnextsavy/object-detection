@@ -14,6 +14,7 @@ function App() {
   const [error, setError] = useState(null);
   const [mode, setMode] = useState('webcam');
   const [model, setModel] = useState(null);
+  const [webcamError, setWebcamError] = useState(null);
 
   useEffect(() => {
     const setupTf = async () => {
@@ -126,7 +127,15 @@ function App() {
 
   useEffect(() => {
     if (mode === 'webcam' && !isLoading) {
-      detectFromWebcam();
+      navigator.mediaDevices.getUserMedia({ video: true })
+        .then(() => {
+          setWebcamError(null);
+          detectFromWebcam();
+        })
+        .catch(err => {
+          setWebcamError("Webcam access denied or not available. Please check your camera permissions.");
+          console.error(err);
+        });
     }
   }, [mode, detectFromWebcam, isLoading]);
 
@@ -144,10 +153,18 @@ function App() {
             onChange={handleFileUpload}
             className="file-input"
           />
-          <button onClick={() => setMode('webcam')} className="mode-button">
+          <button onClick={() => {
+            setMode('webcam');
+            navigator.mediaDevices.getUserMedia({ video: true })
+              .catch(err => {
+                setWebcamError("Webcam access denied or not available");
+                console.error(err);
+              });
+          }} className="mode-button">
             Use Webcam
           </button>
         </div>
+        {webcamError && <div className="error-message">{webcamError}</div>}
         <div className="detections-box">
           <h3>Detected Items</h3>
           <div id="detectionsList"></div>
@@ -167,7 +184,7 @@ function App() {
               zIndex: 9,
               width: 640,
               height: 480,
-              visibility: "hidden"
+              display: mode === 'webcam' ? 'block' : 'none'
             }}
           />
         )}
