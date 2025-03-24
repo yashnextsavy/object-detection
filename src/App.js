@@ -49,14 +49,14 @@ function App() {
         const displayWidth = Math.min(640, img.width);
         const scale = displayWidth / img.width;
         const displayHeight = img.height * scale;
-        
+
         canvas.width = displayWidth;
         canvas.height = displayHeight;
         const ctx = canvas.getContext('2d');
-        
+
         // Draw the image first
         ctx.drawImage(img, 0, 0, displayWidth, displayHeight);
-        
+
         if (model) {
           const predictions = await model.detect(img);
           // Scale the predictions to match the displayed image size
@@ -105,20 +105,20 @@ function App() {
 
         const ctx = canvasRef.current.getContext('2d');
         ctx.clearRect(0, 0, videoWidth, videoHeight);
-        
+
         // Draw video frame
         ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
-        
+
         // Detect objects with lower threshold for better detection
         const predictions = await model.detect(video, undefined, 0.3);
-        
+
         // Draw bounding boxes
         ctx.lineWidth = 4;
         predictions.forEach(prediction => {
           const [x, y, width, height] = prediction.bbox;
           ctx.strokeStyle = "#00FF00";
           ctx.strokeRect(x, y, width, height);
-          
+
           // Draw label
           const text = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
           ctx.font = '18px Arial';
@@ -193,25 +193,26 @@ function App() {
       <header className="App-header">
         {error && <div className="error-message">{error}</div>}
         {isLoading && <div className="loading-message">Loading TensorFlow.js...</div>}
-        <h1>Object Detection</h1>
-        
-        <div className="controls">
-          <input
-            type="file"
-            accept="image/*,video/*"
-            onChange={handleFileUpload}
-            className="file-input"
-          />
-          <button onClick={() => {
-            setMode('webcam');
-            navigator.mediaDevices.getUserMedia({ video: true })
-              .catch(err => {
-                setWebcamError("Webcam access denied or not available");
-                console.error(err);
-              });
-          }} className="mode-button">
-            Use Webcam
-          </button>
+        <div className="controller-wrapper">
+          <h1>Object Detection</h1>
+          <div className="controls">
+            <input
+              type="file"
+              accept="image/*,video/*"
+              onChange={handleFileUpload}
+              className="file-input"
+            />
+            <button onClick={() => {
+              setMode('webcam');
+              navigator.mediaDevices.getUserMedia({ video: true })
+                .catch(err => {
+                  setWebcamError("Webcam access denied or not available");
+                  console.error(err);
+                });
+            }} className="mode-button">
+              Use Webcam
+            </button>
+          </div>
         </div>
         {webcamError && <div className="error-message">{webcamError}</div>}
         <div className="detections-box">
@@ -230,7 +231,7 @@ function App() {
               left: 0,
               right: 0,
               textAlign: "center",
-              zIndex: 9,
+              zIndex: 8,
               width: 640,
               height: 480,
               display: mode === 'webcam' ? 'block' : 'none'
@@ -247,8 +248,9 @@ function App() {
             left: 0,
             right: 0,
             textAlign: "center",
-            zIndex: 9,
+            zIndex: 8,
             maxWidth: '100%',
+            width: '1280px',
             height: 'auto',
             display: mode === 'video' ? 'block' : 'none'
           }}
@@ -266,6 +268,7 @@ function App() {
             textAlign: "center",
             zIndex: 8,
             maxWidth: '100%',
+            width: '1280px',
             height: 'auto',
           }}
         />

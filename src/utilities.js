@@ -26,7 +26,7 @@ export const drawRect = (detections, ctx, skipClear = false) => {
         ctx.strokeRect(x, y, width, height);
 
         // Draw background for text
-        ctx.font = "18px Arial";
+        ctx.font = "20px Arial";
         const textWidth = ctx.measureText(text).width;
         ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
         ctx.fillRect(x, y - 25, textWidth + 10, 25);
