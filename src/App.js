@@ -73,12 +73,18 @@ function App() {
         }
       };
     } else if (fileType === 'video') {
-      const video = videoRef.current;
-      video.src = URL.createObjectURL(file);
-      video.onloadedmetadata = () => {
-        canvasRef.current.width = video.videoWidth;
-        canvasRef.current.height = video.videoHeight;
-      };
+      if (videoRef.current) {
+        const video = videoRef.current;
+        const videoURL = URL.createObjectURL(file);
+        video.src = videoURL;
+        video.onloadedmetadata = () => {
+          canvasRef.current.width = video.videoWidth;
+          canvasRef.current.height = video.videoHeight;
+        };
+        video.onloadeddata = () => {
+          detectFromVideo();
+        };
+      }
     }
   };
 
@@ -86,21 +92,63 @@ function App() {
     if (!model || !videoRef.current || !canvasRef.current) return;
 
     const video = videoRef.current;
-    if (video.paused || video.ended) return;
+    if (video.paused || video.ended || video.readyState < 2) return;
 
-    const predictions = await model.detect(video);
-    const ctx = canvasRef.current.getContext('2d');
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    ctx.drawImage(video, 0, 0);
-    drawRect(predictions, ctx);
+    try {
+      // Make sure video is playing and ready
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        // Set canvas dimensions to match video
+        const videoWidth = video.videoWidth || 640;
+        const videoHeight = video.videoHeight || 480;
+        canvasRef.current.width = videoWidth;
+        canvasRef.current.height = videoHeight;
+
+        const ctx = canvasRef.current.getContext('2d');
+        ctx.clearRect(0, 0, videoWidth, videoHeight);
+        
+        // Draw video frame
+        ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+        
+        // Detect objects with lower threshold for better detection
+        const predictions = await model.detect(video, undefined, 0.3);
+        
+        // Draw bounding boxes
+        ctx.lineWidth = 4;
+        predictions.forEach(prediction => {
+          const [x, y, width, height] = prediction.bbox;
+          ctx.strokeStyle = "#00FF00";
+          ctx.strokeRect(x, y, width, height);
+          
+          // Draw label
+          const text = `${prediction.class} ${Math.round(prediction.score * 100)}%`;
+          ctx.font = '18px Arial';
+          ctx.fillStyle = "#00FF00";
+          ctx.fillText(text, x, y > 20 ? y - 5 : y + 20);
+        });
+      }
+    } catch (err) {
+      console.error('Detection error:', err);
+    }
     requestAnimationFrame(detectFromVideo);
   }, [model]);
 
   useEffect(() => {
-    if (mode === 'video') {
-      videoRef.current?.play();
-      detectFromVideo();
+    let animationFrame: number;
+    if (mode === 'video' && videoRef.current) {
+      videoRef.current.addEventListener('loadeddata', () => {
+        if (videoRef.current && canvasRef.current) {
+          canvasRef.current.width = videoRef.current.videoWidth;
+          canvasRef.current.height = videoRef.current.videoHeight;
+          videoRef.current.play();
+          animationFrame = requestAnimationFrame(detectFromVideo);
+        }
+      });
     }
+    return () => {
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+      }
+    };
   }, [mode, detectFromVideo]);
 
   const detectFromWebcam = useCallback(async () => {
@@ -116,13 +164,14 @@ function App() {
       canvasRef.current.width = videoWidth;
       canvasRef.current.height = videoHeight;
 
-      const predictions = await model.detect(video);
+      const predictions = await model.detect(video, undefined, 0.5);
       const ctx = canvasRef.current.getContext('2d');
+      ctx.clearRect(0, 0, videoWidth, videoHeight);
       ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
       drawRect(predictions, ctx, true);
     }
 
-    requestAnimationFrame(detectFromWebcam);
+    setTimeout(() => requestAnimationFrame(detectFromWebcam), 10);
   }, [model]);
 
   useEffect(() => {
@@ -189,22 +238,22 @@ function App() {
           />
         )}
 
-        {mode === 'video' && (
-          <video
-            ref={videoRef}
-            style={{
-              position: "absolute",
-              marginLeft: "auto",
-              marginRight: "auto",
-              left: 0,
-              right: 0,
-              textAlign: "center",
-              zIndex: 9,
-              maxWidth: '100%',
-              height: 'auto',
-            }}
-          />
-        )}
+        <video
+          ref={videoRef}
+          style={{
+            position: "absolute",
+            marginLeft: "auto",
+            marginRight: "auto",
+            left: 0,
+            right: 0,
+            textAlign: "center",
+            zIndex: 9,
+            maxWidth: '100%',
+            height: 'auto',
+            display: mode === 'video' ? 'block' : 'none'
+          }}
+          controls
+        />
 
         <canvas
           ref={canvasRef}
