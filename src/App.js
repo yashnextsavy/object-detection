@@ -11,14 +11,12 @@ function App() {
   const videoRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [mode, setMode] = useState('webcam');
+  const [mode, setMode] = useState('none'); // Changed default mode to 'none'
   const [model, setModel] = useState(null);
   const [webcamError, setWebcamError] = useState(null);
   const [croppedObjects, setCroppedObjects] = useState([]); // Store cropped objects
   const [maskedRegions, setMaskedRegions] = useState([]); // Track masked areas
   const [detectedObjects, setDetectedObjects] = useState([]); // Track unique objects by class and position
-
-  let DetectionPercentage = 0.5
 
   useEffect(() => {
     const setupTf = async () => {
@@ -66,7 +64,7 @@ function App() {
         ctx.drawImage(img, 0, 0, displayWidth, displayHeight);
 
         if (model) {
-          const predictions = await model.detect(img, undefined, DetectionPercentage); // Updated threshold to 0.6
+          const predictions = await model.detect(img, undefined, 0.6);
           const scaledPredictions = predictions.map(pred => ({
             ...pred,
             bbox: [
@@ -79,7 +77,7 @@ function App() {
 
           // Crop detected objects
           const newCroppedObjects = scaledPredictions
-            .filter(pred => pred.score > DetectionPercentage) // Updated threshold to 0.6
+            .filter(pred => pred.score > 0.6)
             .map(pred => {
               const [x, y, width, height] = pred.bbox;
               return cropImage(ctx, x, y, width, height, pred.class, pred.score);
@@ -131,7 +129,7 @@ function App() {
           ctx.fillRect(region.x, region.y, region.width, region.height);
         });
 
-        const predictions = await model.detect(video, undefined, DetectionPercentage); // Updated threshold to 0.6
+        const predictions = await model.detect(video, undefined, 0.6);
         console.log('Video Predictions:', predictions); // Debug
         const newCroppedObjects = [];
         const newDetectedObjects = [...detectedObjects];
@@ -162,7 +160,7 @@ function App() {
             return distance < 50; // Stricter distance threshold: 50px
           });
 
-          if (!isMasked && !isDuplicate && score > DetectionPercentage) { // Updated threshold to 0.6
+          if (!isMasked && !isDuplicate && score > 0.6) {
             const croppedImage = cropImage(ctx, x, y, width, height, className, score);
             newCroppedObjects.push(croppedImage);
 
@@ -239,7 +237,7 @@ function App() {
         ctx.fillRect(region.x, region.y, region.width, region.height);
       });
 
-      const predictions = await model.detect(canvasRef.current, undefined, DetectionPercentage); // Updated threshold to 0.6
+      const predictions = await model.detect(canvasRef.current, undefined, 0.6);
       console.log('Webcam Predictions:', predictions); // Debug
 
       const newCroppedObjects = [];
@@ -255,7 +253,7 @@ function App() {
           return overlapArea > boxArea * 0.1;
         });
 
-        if (!isMasked && score > DetectionPercentage) { // Updated threshold to 0.6
+        if (!isMasked && score > 0.6) {
           const croppedImage = cropImage(ctx, x, y, width, height, className, score);
           newCroppedObjects.push(croppedImage);
           setMaskedRegions(prev => [...prev, { x, y, width, height }]);
@@ -276,19 +274,22 @@ function App() {
     setTimeout(() => requestAnimationFrame(detectFromWebcam), 500);
   }, [model, maskedRegions]);
 
-  useEffect(() => {
-    if (mode === 'webcam' && !isLoading) {
-      navigator.mediaDevices.getUserMedia({ video: true })
-        .then(() => {
-          setWebcamError(null);
-          detectFromWebcam();
-        })
-        .catch(err => {
-          setWebcamError("Webcam access denied or not available.");
-          console.error(err);
-        });
-    }
-  }, [mode, detectFromWebcam, isLoading]);
+  // Removed automatic webcam initialization on app load
+  const handleWebcamActivation = () => {
+    setMode('webcam');
+    setCroppedObjects([]);
+    setMaskedRegions([]);
+    setDetectedObjects([]);
+    navigator.mediaDevices.getUserMedia({ video: true })
+      .then(() => {
+        setWebcamError(null);
+        detectFromWebcam();
+      })
+      .catch(err => {
+        setWebcamError("Webcam access denied or not available.");
+        console.error(err);
+      });
+  };
 
   return (
     <div className="App">
@@ -305,17 +306,7 @@ function App() {
                 onChange={handleFileUpload}
                 className="file-input"
               />
-              <button onClick={() => {
-                setMode('webcam');
-                setCroppedObjects([]);
-                setMaskedRegions([]);
-                setDetectedObjects([]); // Clear detected objects
-                navigator.mediaDevices.getUserMedia({ video: true })
-                  .catch(err => {
-                    setWebcamError("Webcam access denied or not available");
-                    console.error(err);
-                  });
-              }} className="mode-button">
+              <button onClick={handleWebcamActivation} className="mode-button">
                 Use Webcam
               </button>
             </div>
@@ -357,7 +348,7 @@ function App() {
             textAlign: "center",
             zIndex: 8,
             maxWidth: '100%',
-            width: '991px',
+            width: '1280px',
             height: 'auto',
             display: mode === 'video' ? 'block' : 'none'
           }}
@@ -375,7 +366,7 @@ function App() {
             textAlign: "center",
             zIndex: 8,
             maxWidth: '100%',
-            width: '991px',
+            width: '1280px',
             height: 'auto',
           }}
         />
