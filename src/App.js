@@ -16,6 +16,9 @@ function App() {
   const [webcamError, setWebcamError] = useState(null);
   const [croppedObjects, setCroppedObjects] = useState([]); // Store cropped objects
   const [maskedRegions, setMaskedRegions] = useState([]); // Track masked areas
+  const [detectedObjects, setDetectedObjects] = useState([]); // Track unique objects by class and position
+
+  let DetectionPercentage = 0.5
 
   useEffect(() => {
     const setupTf = async () => {
@@ -42,6 +45,7 @@ function App() {
     // Clear old data before processing new upload
     setCroppedObjects([]);
     setMaskedRegions([]);
+    setDetectedObjects([]); // Clear detected objects
 
     const fileType = file.type.split('/')[0];
     setMode(fileType);
@@ -62,7 +66,7 @@ function App() {
         ctx.drawImage(img, 0, 0, displayWidth, displayHeight);
 
         if (model) {
-          const predictions = await model.detect(img);
+          const predictions = await model.detect(img, undefined, DetectionPercentage); // Updated threshold to 0.6
           const scaledPredictions = predictions.map(pred => ({
             ...pred,
             bbox: [
@@ -75,7 +79,7 @@ function App() {
 
           // Crop detected objects
           const newCroppedObjects = scaledPredictions
-            .filter(pred => pred.score > 0.3)
+            .filter(pred => pred.score > DetectionPercentage) // Updated threshold to 0.6
             .map(pred => {
               const [x, y, width, height] = pred.bbox;
               return cropImage(ctx, x, y, width, height, pred.class, pred.score);
@@ -127,8 +131,10 @@ function App() {
           ctx.fillRect(region.x, region.y, region.width, region.height);
         });
 
-        const predictions = await model.detect(video, undefined, 0.3);
+        const predictions = await model.detect(video, undefined, DetectionPercentage); // Updated threshold to 0.6
+        console.log('Video Predictions:', predictions); // Debug
         const newCroppedObjects = [];
+        const newDetectedObjects = [...detectedObjects];
 
         predictions.forEach(prediction => {
           const { bbox, class: className, score } = prediction;
@@ -140,50 +146,59 @@ function App() {
             const overlapY = Math.max(0, Math.min(y + height, region.y + region.height) - Math.max(y, region.y));
             const overlapArea = overlapX * overlapY;
             const boxArea = width * height;
-            return overlapArea > boxArea * 0.3; // Lowered threshold to 30% for stricter masking
+            return overlapArea > boxArea * 0.1; // Stricter threshold: 10%
           });
 
-          if (!isMasked && score > 0.3) {
-            // Check for duplicates in croppedObjects based on class and bounding box similarity
-            const isDuplicate = croppedObjects.some(obj => {
-              if (obj.className !== className) return false;
-              const [objX, objY, objWidth, objHeight] = [obj.x, obj.y, obj.width, obj.height];
-              const overlapX = Math.max(0, Math.min(x + width, objX + objWidth) - Math.max(x, objX));
-              const overlapY = Math.max(0, Math.min(y + height, objY + objHeight) - Math.max(y, objY));
-              const overlapArea = overlapX * overlapY;
-              const boxArea = width * height;
-              return overlapArea > boxArea * 0.3; // Same 30% threshold for duplicates
+          // Check for duplicates based on class and position
+          const centerX = x + width / 2;
+          const centerY = y + height / 2;
+          const isDuplicate = detectedObjects.some(obj => {
+            if (obj.className !== className) return false;
+            const objCenterX = obj.centerX;
+            const objCenterY = obj.centerY;
+            const distance = Math.sqrt(
+              Math.pow(centerX - objCenterX, 2) + Math.pow(centerY - objCenterY, 2)
+            );
+            return distance < 50; // Stricter distance threshold: 50px
+          });
+
+          if (!isMasked && !isDuplicate && score > DetectionPercentage) { // Updated threshold to 0.6
+            const croppedImage = cropImage(ctx, x, y, width, height, className, score);
+            newCroppedObjects.push(croppedImage);
+
+            // Add to detected objects
+            newDetectedObjects.push({
+              className,
+              centerX,
+              centerY
             });
 
-            if (!isDuplicate) {
-              const croppedImage = cropImage(ctx, x, y, width, height, className, score);
-              // Add bounding box info to croppedImage for duplicate checking
-              croppedImage.x = x;
-              croppedImage.y = y;
-              croppedImage.width = width;
-              croppedImage.height = height;
-              newCroppedObjects.push(croppedImage);
-
-              // Add to masked regions to prevent re-detection
-              setMaskedRegions(prev => [...prev, { x, y, width, height }]);
-            }
+            // Add to masked regions with expanded area
+            const padding = 30; // Padding of 30px
+            setMaskedRegions(prev => [...prev, {
+              x: Math.max(0, x - padding),
+              y: Math.max(0, y - padding),
+              width: width + 2 * padding,
+              height: height + 2 * padding
+            }]);
           }
         });
 
         if (newCroppedObjects.length > 0) {
           setCroppedObjects(prev => [...prev, ...newCroppedObjects]);
+          setDetectedObjects(newDetectedObjects);
         }
 
         drawRect(predictions.filter(pred => !maskedRegions.some(r =>
           Math.max(0, Math.min(pred.bbox[0] + pred.bbox[2], r.x + r.width) - Math.max(pred.bbox[0], r.x)) *
           Math.max(0, Math.min(pred.bbox[1] + pred.bbox[3], r.y + r.height) - Math.max(pred.bbox[1], r.y)) >
-          (pred.bbox[2] * pred.bbox[3] * 0.3))), ctx, false);
+          (pred.bbox[2] * pred.bbox[3] * 0.1))), ctx, false);
       }
     } catch (err) {
       console.error('Detection error:', err);
     }
     requestAnimationFrame(detectFromVideo);
-  }, [model, maskedRegions, croppedObjects]); // Added croppedObjects to dependencies
+  }, [model, maskedRegions, detectedObjects]);
 
   useEffect(() => {
     let animationFrame;
@@ -224,7 +239,7 @@ function App() {
         ctx.fillRect(region.x, region.y, region.width, region.height);
       });
 
-      const predictions = await model.detect(canvasRef.current, undefined, 0.3);
+      const predictions = await model.detect(canvasRef.current, undefined, DetectionPercentage); // Updated threshold to 0.6
       console.log('Webcam Predictions:', predictions); // Debug
 
       const newCroppedObjects = [];
@@ -237,10 +252,10 @@ function App() {
           const overlapY = Math.max(0, Math.min(y + height, region.y + region.height) - Math.max(y, region.y));
           const overlapArea = overlapX * overlapY;
           const boxArea = width * height;
-          return overlapArea > boxArea * 0.3;
+          return overlapArea > boxArea * 0.1;
         });
 
-        if (!isMasked && score > 0.3) {
+        if (!isMasked && score > DetectionPercentage) { // Updated threshold to 0.6
           const croppedImage = cropImage(ctx, x, y, width, height, className, score);
           newCroppedObjects.push(croppedImage);
           setMaskedRegions(prev => [...prev, { x, y, width, height }]);
@@ -255,7 +270,7 @@ function App() {
       drawRect(predictions.filter(pred => !maskedRegions.some(r =>
         Math.max(0, Math.min(pred.bbox[0] + pred.bbox[2], r.x + r.width) - Math.max(pred.bbox[0], r.x)) *
         Math.max(0, Math.min(pred.bbox[1] + pred.bbox[3], r.y + r.height) - Math.max(pred.bbox[1], r.y)) >
-        (pred.bbox[2] * pred.bbox[3] * 0.3))), ctx, true);
+        (pred.bbox[2] * pred.bbox[3] * 0.1))), ctx, true);
     }
 
     setTimeout(() => requestAnimationFrame(detectFromWebcam), 500);
@@ -294,6 +309,7 @@ function App() {
                 setMode('webcam');
                 setCroppedObjects([]);
                 setMaskedRegions([]);
+                setDetectedObjects([]); // Clear detected objects
                 navigator.mediaDevices.getUserMedia({ video: true })
                   .catch(err => {
                     setWebcamError("Webcam access denied or not available");
@@ -310,31 +326,6 @@ function App() {
             <div id="detectionsList"></div>
           </div>
         </div>
-
-        {croppedObjects.length > 0 && (
-          <div className="cropped-objects" style={{ marginTop: '20px', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-            <h3>Cropped Objects</h3>
-            {croppedObjects.map((obj, index) => (
-              <div key={index} style={{ textAlign: 'center' }}>
-                <img src={obj.src} alt={obj.className} style={{ maxWidth: '100px', border: '1px solid #00FF00' }} />
-                <p>{obj.className} - {obj.score}%</p>
-                <button
-                  onClick={() => {
-                    const link = document.createElement('a');
-                    link.href = obj.src;
-                    link.download = `${obj.className}-${obj.score}-${Date.now()}.png`;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                  }}
-                  style={{ marginTop: '5px', padding: '5px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                >
-                  Download
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
 
         {mode === 'webcam' && (
           <Webcam
@@ -366,7 +357,7 @@ function App() {
             textAlign: "center",
             zIndex: 8,
             maxWidth: '100%',
-            width: '1280px',
+            width: '991px',
             height: 'auto',
             display: mode === 'video' ? 'block' : 'none'
           }}
@@ -384,10 +375,35 @@ function App() {
             textAlign: "center",
             zIndex: 8,
             maxWidth: '100%',
-            width: '1280px',
+            width: '991px',
             height: 'auto',
           }}
         />
+
+        {croppedObjects.length > 0 && (
+          <div className="cropped-objects" style={{ marginTop: '53%', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+            <h3>Cropped Objects ({croppedObjects.length})</h3>
+            {croppedObjects.map((obj, index) => (
+              <div key={index} style={{ textAlign: 'center' }}>
+                <img src={obj.src} alt={obj.className} style={{ maxWidth: '100px', border: '1px solid #00FF00' }} />
+                <p>{obj.className} - {obj.score}%</p>
+                <button
+                  onClick={() => {
+                    const link = document.createElement('a');
+                    link.href = obj.src;
+                    link.download = `${obj.className}-${obj.score}-${Date.now()}.png`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                  }}
+                  style={{ marginTop: '5px', padding: '5px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                >
+                  Download
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </header>
     </div>
   );
