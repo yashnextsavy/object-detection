@@ -5,18 +5,44 @@ import Webcam from "react-webcam";
 import "./App.css";
 import { drawRect, cropImage } from "./utilities";
 
+// Utility function to calculate Intersection over Union (IoU) between two bounding boxes
+const calculateIoU = (box1, box2) => {
+  const [x1, y1, w1, h1] = box1;
+  const [x2, y2, w2, h2] = box2;
+
+  const xLeft = Math.max(x1, x2);
+  const yTop = Math.max(y1, y2);
+  const xRight = Math.min(x1 + w1, x2 + w2);
+  const yBottom = Math.min(y1 + h1, y2 + h2);
+
+  if (xRight < xLeft || yBottom < yTop) return 0;
+
+  const intersectionArea = (xRight - xLeft) * (yBottom - yTop);
+  const box1Area = w1 * h1;
+  const box2Area = w2 * h2;
+  const unionArea = box1Area + box2Area - intersectionArea;
+
+  return intersectionArea / unionArea;
+};
+
 function App() {
   const webcamRef = useRef(null);
   const canvasRef = useRef(null);
   const videoRef = useRef(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [mode, setMode] = useState('none'); // Changed default mode to 'none'
+  const [mode, setMode] = useState('none');
   const [model, setModel] = useState(null);
   const [webcamError, setWebcamError] = useState(null);
-  const [croppedObjects, setCroppedObjects] = useState([]); // Store cropped objects
-  const [maskedRegions, setMaskedRegions] = useState([]); // Track masked areas
-  const [detectedObjects, setDetectedObjects] = useState([]); // Track unique objects by class and position
+  const [croppedObjects, setCroppedObjects] = useState([]);
+  const [maskedRegions, setMaskedRegions] = useState([]);
+  const [trackedObjects, setTrackedObjects] = useState([]);
+  const [previousCenters, setPreviousCenters] = useState([]); // Track centers of objects in the previous frame
+
+  // Define thresholds as variables
+  const IOU_THRESHOLD = 0.3; // Lowered for more leniency with camera movement
+  const TEMPORAL_THRESHOLD = 10000; // Increased to 10 seconds for longer tracking
+  const CONFIDENCE_THRESHOLD = 0.1; // Confidence difference threshold for deduplication
 
   useEffect(() => {
     const setupTf = async () => {
@@ -40,10 +66,10 @@ function App() {
     const file = event.target.files[0];
     if (!file) return;
 
-    // Clear old data before processing new upload
     setCroppedObjects([]);
     setMaskedRegions([]);
-    setDetectedObjects([]); // Clear detected objects
+    setTrackedObjects([]);
+    setPreviousCenters([]);
 
     const fileType = file.type.split('/')[0];
     setMode(fileType);
@@ -75,7 +101,6 @@ function App() {
             ]
           }));
 
-          // Crop detected objects
           const newCroppedObjects = scaledPredictions
             .filter(pred => pred.score > 0.6)
             .map(pred => {
@@ -123,68 +148,112 @@ function App() {
         ctx.clearRect(0, 0, videoWidth, videoHeight);
         ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
 
-        // Apply masks to previously detected regions
         maskedRegions.forEach(region => {
           ctx.fillStyle = 'black';
           ctx.fillRect(region.x, region.y, region.width, region.height);
         });
 
         const predictions = await model.detect(video, undefined, 0.6);
-        console.log('Video Predictions:', predictions); // Debug
+        console.log('Video Predictions:', predictions);
         const newCroppedObjects = [];
-        const newDetectedObjects = [...detectedObjects];
+        const currentTime = Date.now();
+        const updatedTrackedObjects = [];
+
+        // Calculate centers of current predictions
+        const currentCenters = predictions.map(pred => {
+          const [x, y, width, height] = pred.bbox;
+          return { x: x + width / 2, y: y + height / 2 };
+        });
+
+        // Estimate camera motion by calculating average shift in centers
+        let avgShiftX = 0;
+        let avgShiftY = 0;
+        if (previousCenters.length > 0 && currentCenters.length > 0) {
+          const pairedCenters = Math.min(previousCenters.length, currentCenters.length);
+          if (pairedCenters > 0) {
+            let totalShiftX = 0;
+            let totalShiftY = 0;
+            for (let i = 0; i < pairedCenters; i++) {
+              totalShiftX += currentCenters[i].x - previousCenters[i].x;
+              totalShiftY += currentCenters[i].y - previousCenters[i].y;
+            }
+            avgShiftX = totalShiftX / pairedCenters;
+            avgShiftY = totalShiftY / pairedCenters;
+          }
+        }
+        setPreviousCenters(currentCenters);
+
+        // Clean up old tracked objects
+        const trackedObjectsFiltered = trackedObjects.filter(obj => currentTime - obj.lastSeen < TEMPORAL_THRESHOLD);
 
         predictions.forEach(prediction => {
           const { bbox, class: className, score } = prediction;
-          const [x, y, width, height] = bbox;
+          let [x, y, width, height] = bbox;
 
-          // Check if this region is already masked
+          // Adjust bounding box for camera motion
+          x -= avgShiftX;
+          y -= avgShiftY;
+
           const isMasked = maskedRegions.some(region => {
             const overlapX = Math.max(0, Math.min(x + width, region.x + region.width) - Math.max(x, region.x));
             const overlapY = Math.max(0, Math.min(y + height, region.y + region.height) - Math.max(y, region.y));
             const overlapArea = overlapX * overlapY;
             const boxArea = width * height;
-            return overlapArea > boxArea * 0.1; // Stricter threshold: 10%
+            return overlapArea > boxArea * 0.1;
           });
 
-          // Check for duplicates based on class and position
-          const centerX = x + width / 2;
-          const centerY = y + height / 2;
-          const isDuplicate = detectedObjects.some(obj => {
-            if (obj.className !== className) return false;
-            const objCenterX = obj.centerX;
-            const objCenterY = obj.centerY;
-            const distance = Math.sqrt(
-              Math.pow(centerX - objCenterX, 2) + Math.pow(centerY - objCenterY, 2)
-            );
-            return distance < 50; // Stricter distance threshold: 50px
-          });
+          if (!isMasked && score > 0.6) {
+            let isDuplicate = false;
+            let matchedObject = null;
 
-          if (!isMasked && !isDuplicate && score > 0.6) {
-            const croppedImage = cropImage(ctx, x, y, width, height, className, score);
-            newCroppedObjects.push(croppedImage);
+            for (const trackedObj of trackedObjectsFiltered) {
+              if (trackedObj.className !== className) continue;
 
-            // Add to detected objects
-            newDetectedObjects.push({
-              className,
-              centerX,
-              centerY
-            });
+              const iou = calculateIoU([x, y, width, height], trackedObj.bbox);
+              const confidenceDiff = Math.abs(score - trackedObj.score);
+              if (iou > IOU_THRESHOLD && confidenceDiff < CONFIDENCE_THRESHOLD) {
+                isDuplicate = true;
+                matchedObject = trackedObj;
+                break;
+              }
+            }
 
-            // Add to masked regions with expanded area
-            const padding = 30; // Padding of 30px
-            setMaskedRegions(prev => [...prev, {
-              x: Math.max(0, x - padding),
-              y: Math.max(0, y - padding),
-              width: width + 2 * padding,
-              height: height + 2 * padding
-            }]);
+            if (!isDuplicate) {
+              const croppedImage = cropImage(ctx, x + avgShiftX, y + avgShiftY, width, height, className, score);
+              newCroppedObjects.push(croppedImage);
+
+              const newId = trackedObjects.length > 0 ? Math.max(...trackedObjects.map(obj => obj.id)) + 1 : 1;
+              updatedTrackedObjects.push({
+                id: newId,
+                className,
+                bbox: [x, y, width, height],
+                score,
+                lastSeen: currentTime
+              });
+
+              const padding = 30;
+              setMaskedRegions(prev => [...prev, {
+                x: Math.max(0, (x + avgShiftX) - padding),
+                y: Math.max(0, (y + avgShiftY) - padding),
+                width: width + 2 * padding,
+                height: height + 2 * padding
+              }]);
+            } else if (matchedObject) {
+              updatedTrackedObjects.push({
+                ...matchedObject,
+                bbox: [x, y, width, height],
+                score,
+                lastSeen: currentTime
+              });
+            }
           }
         });
 
+        const nonMatchedObjects = trackedObjectsFiltered.filter(obj => !updatedTrackedObjects.some(updated => updated.id === obj.id));
+        setTrackedObjects([...nonMatchedObjects, ...updatedTrackedObjects]);
+
         if (newCroppedObjects.length > 0) {
           setCroppedObjects(prev => [...prev, ...newCroppedObjects]);
-          setDetectedObjects(newDetectedObjects);
         }
 
         drawRect(predictions.filter(pred => !maskedRegions.some(r =>
@@ -196,7 +265,7 @@ function App() {
       console.error('Detection error:', err);
     }
     requestAnimationFrame(detectFromVideo);
-  }, [model, maskedRegions, detectedObjects]);
+  }, [model, maskedRegions, trackedObjects, previousCenters]);
 
   useEffect(() => {
     let animationFrame;
@@ -231,19 +300,48 @@ function App() {
       ctx.clearRect(0, 0, videoWidth, videoHeight);
       ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
 
-      // Apply masks
       maskedRegions.forEach(region => {
         ctx.fillStyle = 'black';
         ctx.fillRect(region.x, region.y, region.width, region.height);
       });
 
       const predictions = await model.detect(canvasRef.current, undefined, 0.6);
-      console.log('Webcam Predictions:', predictions); // Debug
+      console.log('Webcam Predictions:', predictions);
 
       const newCroppedObjects = [];
+      const currentTime = Date.now();
+      const updatedTrackedObjects = [];
+
+      const currentCenters = predictions.map(pred => {
+        const [x, y, width, height] = pred.bbox;
+        return { x: x + width / 2, y: y + height / 2 };
+      });
+
+      let avgShiftX = 0;
+      let avgShiftY = 0;
+      if (previousCenters.length > 0 && currentCenters.length > 0) {
+        const pairedCenters = Math.min(previousCenters.length, currentCenters.length);
+        if (pairedCenters > 0) {
+          let totalShiftX = 0;
+          let totalShiftY = 0;
+          for (let i = 0; i < pairedCenters; i++) {
+            totalShiftX += currentCenters[i].x - previousCenters[i].x;
+            totalShiftY += currentCenters[i].y - previousCenters[i].y;
+          }
+          avgShiftX = totalShiftX / pairedCenters;
+          avgShiftY = totalShiftY / pairedCenters;
+        }
+      }
+      setPreviousCenters(currentCenters);
+
+      const trackedObjectsFiltered = trackedObjects.filter(obj => currentTime - obj.lastSeen < TEMPORAL_THRESHOLD);
+
       predictions.forEach(prediction => {
         const { bbox, class: className, score } = prediction;
-        const [x, y, width, height] = bbox;
+        let [x, y, width, height] = bbox;
+
+        x -= avgShiftX;
+        y -= avgShiftY;
 
         const isMasked = maskedRegions.some(region => {
           const overlapX = Math.max(0, Math.min(x + width, region.x + region.width) - Math.max(x, region.x));
@@ -254,13 +352,49 @@ function App() {
         });
 
         if (!isMasked && score > 0.6) {
-          const croppedImage = cropImage(ctx, x, y, width, height, className, score);
-          newCroppedObjects.push(croppedImage);
-          setMaskedRegions(prev => [...prev, { x, y, width, height }]);
+          let isDuplicate = false;
+          let matchedObject = null;
+
+          for (const trackedObj of trackedObjectsFiltered) {
+            if (trackedObj.className !== className) continue;
+
+            const iou = calculateIoU([x, y, width, height], trackedObj.bbox);
+            const confidenceDiff = Math.abs(score - trackedObj.score);
+            if (iou > IOU_THRESHOLD && confidenceDiff < CONFIDENCE_THRESHOLD) {
+              isDuplicate = true;
+              matchedObject = trackedObj;
+              break;
+            }
+          }
+
+          if (!isDuplicate) {
+            const croppedImage = cropImage(ctx, x + avgShiftX, y + avgShiftY, width, height, className, score);
+            newCroppedObjects.push(croppedImage);
+
+            const newId = trackedObjects.length > 0 ? Math.max(...trackedObjects.map(obj => obj.id)) + 1 : 1;
+            updatedTrackedObjects.push({
+              id: newId,
+              className,
+              bbox: [x, y, width, height],
+              score,
+              lastSeen: currentTime
+            });
+
+            setMaskedRegions(prev => [...prev, { x: x + avgShiftX, y: y + avgShiftY, width, height }]);
+          } else if (matchedObject) {
+            updatedTrackedObjects.push({
+              ...matchedObject,
+              bbox: [x, y, width, height],
+              score,
+              lastSeen: currentTime
+            });
+          }
         }
       });
 
-      console.log('New Cropped Objects:', newCroppedObjects); // Debug
+      const nonMatchedObjects = trackedObjectsFiltered.filter(obj => !updatedTrackedObjects.some(updated => updated.id === obj.id));
+      setTrackedObjects([...nonMatchedObjects, ...updatedTrackedObjects]);
+
       if (newCroppedObjects.length > 0) {
         setCroppedObjects(prev => [...prev, ...newCroppedObjects]);
       }
@@ -272,14 +406,14 @@ function App() {
     }
 
     setTimeout(() => requestAnimationFrame(detectFromWebcam), 500);
-  }, [model, maskedRegions]);
+  }, [model, maskedRegions, trackedObjects, previousCenters]);
 
-  // Removed automatic webcam initialization on app load
   const handleWebcamActivation = () => {
     setMode('webcam');
     setCroppedObjects([]);
     setMaskedRegions([]);
-    setDetectedObjects([]);
+    setTrackedObjects([]);
+    setPreviousCenters([]);
     navigator.mediaDevices.getUserMedia({ video: true })
       .then(() => {
         setWebcamError(null);
@@ -289,6 +423,23 @@ function App() {
         setWebcamError("Webcam access denied or not available.");
         console.error(err);
       });
+  };
+
+  const handleReset = () => {
+    setMode('none');
+    setCroppedObjects([]);
+    setMaskedRegions([]);
+    setTrackedObjects([]);
+    setPreviousCenters([]);
+    setWebcamError(null);
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.src = '';
+    }
+  };
+
+  const handleClearCroppedObjects = () => {
+    setCroppedObjects([]);
   };
 
   return (
@@ -305,9 +456,30 @@ function App() {
                 accept="image/*,video/*"
                 onChange={handleFileUpload}
                 className="file-input"
+                disabled={isLoading}
               />
-              <button onClick={handleWebcamActivation} className="mode-button">
+              <button
+                onClick={handleWebcamActivation}
+                className="mode-button"
+                disabled={isLoading}
+              >
                 Use Webcam
+              </button>
+              <button
+                onClick={handleReset}
+                className="reset-button"
+                disabled={isLoading}
+                style={{
+                  marginLeft: '10px',
+                  padding: '5px 10px',
+                  background: '#f44336',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: isLoading ? 'not-allowed' : 'pointer'
+                }}
+              >
+                Reset
               </button>
             </div>
           </div>
@@ -373,26 +545,43 @@ function App() {
 
         {croppedObjects.length > 0 && (
           <div className="cropped-objects" style={{ marginTop: '53%', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
-            <h3>Cropped Objects ({croppedObjects.length})</h3>
-            {croppedObjects.map((obj, index) => (
-              <div key={index} style={{ textAlign: 'center' }}>
-                <img src={obj.src} alt={obj.className} style={{ maxWidth: '100px', border: '1px solid #00FF00' }} />
-                <p>{obj.className} - {obj.score}%</p>
-                <button
-                  onClick={() => {
-                    const link = document.createElement('a');
-                    link.href = obj.src;
-                    link.download = `${obj.className}-${obj.score}-${Date.now()}.png`;
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                  }}
-                  style={{ marginTop: '5px', padding: '5px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
-                >
-                  Download
-                </button>
-              </div>
-            ))}
+            <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3>Cropped Objects ({croppedObjects.length})</h3>
+              <button
+                onClick={handleClearCroppedObjects}
+                style={{
+                  padding: '5px 10px',
+                  background: '#f44336',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                Clear
+              </button>
+            </div>
+            <div className="img-wrapper-objects" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', maxHeight: '650px', overflowY: 'scroll' }}>
+              {croppedObjects.map((obj, index) => (
+                <div key={index} style={{ textAlign: 'center' }}>
+                  <img src={obj.src} alt={obj.className} style={{ maxWidth: '100px', border: '1px solid #00FF00' }} />
+                  <p>{obj.className} - {Math.round(obj.score * 100)}%</p>
+                  <button
+                    onClick={() => {
+                      const link = document.createElement('a');
+                      link.href = obj.src;
+                      link.download = `${obj.className}-${obj.score}-${Date.now()}.png`;
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }}
+                    style={{ marginTop: '5px', padding: '5px 10px', background: '#4CAF50', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                  >
+                    Download
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </header>
