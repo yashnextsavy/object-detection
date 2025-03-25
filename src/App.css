@@ -147,14 +147,14 @@ h1 {
   z-index: 10;
   margin-top: 20px;
   margin-bottom: 20px;
-  display: flex;
-  flex-wrap: wrap;
+  /* display: flex; */
+  /* flex-wrap: wrap; */
   gap: 15px; /* Increased from 10px to fit button */
   padding: 15px;
   background: rgba(0, 0, 0, 0.8);
   border-radius: 8px;
   max-width: 640px;
-  justify-content: center;
+  /* justify-content: center; */
   margin: 0 auto;
 }
 

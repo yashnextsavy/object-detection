@@ -465,7 +465,7 @@ function App() {
               >
                 Use Webcam
               </button>
-              <button
+              {/* <button
                 onClick={handleReset}
                 className="reset-button"
                 disabled={isLoading}
@@ -480,7 +480,7 @@ function App() {
                 }}
               >
                 Reset
-              </button>
+              </button> */}
             </div>
           </div>
           {webcamError && <div className="error-message">{webcamError}</div>}
@@ -544,7 +544,7 @@ function App() {
         />
 
         {croppedObjects.length > 0 && (
-          <div className="cropped-objects" style={{ marginTop: '53%', marginBottom: '20px', display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+          <div className="cropped-objects" style={{ marginTop: '53%', marginBottom: '20px' }}>
             <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h3>Cropped Objects ({croppedObjects.length})</h3>
               <button
@@ -561,11 +561,11 @@ function App() {
                 Clear
               </button>
             </div>
-            <div className="img-wrapper-objects" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', maxHeight: '650px', overflowY: 'scroll' }}>
+            <div className="img-wrapper-objects" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', maxHeight: '650px', overflowY: 'scroll', justifyContent: 'center', padding: '20px 0' }}>
               {croppedObjects.map((obj, index) => (
                 <div key={index} style={{ textAlign: 'center' }}>
                   <img src={obj.src} alt={obj.className} style={{ maxWidth: '100px', border: '1px solid #00FF00' }} />
-                  <p>{obj.className} - {Math.round(obj.score * 100)}%</p>
+                  <p>{obj.className} - {Math.round(obj.score)}%</p>
                   <button
                     onClick={() => {
                       const link = document.createElement('a');
