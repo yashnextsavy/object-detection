@@ -13,23 +13,36 @@
   }
 }
 
-.App-header {
+body {
   background-color: #282c34;
-  min-height: 100vh;
+}
+
+.App-header {
+  /* min-height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: center; */
   font-size: calc(10px + 2vmin);
   color: white;
   position: relative;
+  padding-bottom: 20px;
+  /* Add padding to accommodate cropped objects */
 }
 
-.controller-wrapper {
+.header-line-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 15px 30px;
+  position: relative;
+}
+
+/* .controller-wrapper {
   position: absolute;
   top: 0;
   left: 0;
-}
+} */
 
 .loading-message {
   position: absolute;
@@ -44,7 +57,11 @@
 
 .error-message {
   position: absolute;
-  top: 20px;
+  top: 12px;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  width: fit-content;
   background: #ff4444;
   padding: 1rem 2rem;
   border-radius: 8px;
@@ -123,6 +140,46 @@ h1 {
 .confidence {
   color: #ffffff;
   font-size: 0.9rem;
+}
+
+.cropped-objects {
+  position: relative;
+  z-index: 10;
+  margin-top: 20px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 15px; /* Increased from 10px to fit button */
+  padding: 15px;
+  background: rgba(0, 0, 0, 0.8);
+  border-radius: 8px;
+  max-width: 640px;
+  justify-content: center;
+  margin: 0 auto;
+}
+
+.cropped-objects h3 {
+  width: 100%;
+  margin: 0 0 10px 0;
+  font-size: 1.2rem;
+  color: white;
+  text-align: center;
+}
+
+.cropped-objects div {
+  text-align: center;
+}
+
+.cropped-objects img {
+  max-width: 100px;
+  border: 1px solid #00FF00;
+  border-radius: 4px;
+}
+
+.cropped-objects p {
+  margin: 5px 0 0 0;
+  font-size: 0.9rem;
+  color: #ffffff;
 }
 
 .App-link {
